@@ -1,6 +1,6 @@
 # Screen Capture Plugin
 
-Records the Wii U GamePad (DRC) and/or TV screen to a ring buffer in RAM. Two button combos let you **start/stop recording** and **save recordings** to the SD card.
+Records the Wii U GamePad and/or TV screen to a ring buffer in RAM. Two button combos let you **start/stop recording** and **save recordings** to the SD card.
 Both combos can be changed in the Aroma config menu.
 
 ## Usage
