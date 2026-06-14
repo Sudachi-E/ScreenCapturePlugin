@@ -5,8 +5,6 @@ Both combos can be changed in the Aroma config menu.
 
 ## Usage
 
-### Quick start
-
 1. Put the `.wps` to `sd:/wiiu/environments/aroma/plugins/` and reboot.
 2. Recording is always **disabled by default**.
 3. Press **L + ZR + PLUS** to start recording (you'll see a notification).
