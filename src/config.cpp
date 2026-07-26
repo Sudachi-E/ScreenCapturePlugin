@@ -67,6 +67,8 @@ static void onRecordCombo(WUPSButtonCombo_ControllerTypes,
         startSaveThread();
         gEnabled   = true;
         gCapturing = true;
+        OSReport("[ScreenCapture] Recording started: %u sec buffer = %u frames, quality=%d, saveOnBufferEnd=%d\n",
+                 gRingBufferSeconds, gRingBufferFrameCount, gJpegQuality, gSaveOnBufferEnd);
 		NotificationModule_AddInfoNotification(
 		    "\ue01e ScreenCapture: Recording started.");
     } else {
@@ -91,6 +93,12 @@ static void boolItemCallback(ConfigItemBoolean *item, bool newValue) {
     if (std::string_view(item->identifier) == ENABLED_CONFIG_STRING) {
         gEnabled = newValue;
         WUPSStorageAPI::Store(item->identifier, gEnabled);
+    } else if (std::string_view(item->identifier) == SAVE_ON_BUFFER_END_CONFIG_STRING) {
+        gSaveOnBufferEnd = newValue;
+        WUPSStorageAPI::Store(item->identifier, gSaveOnBufferEnd);
+    } else if (std::string_view(item->identifier) == STOP_ON_AUTO_SAVE_CONFIG_STRING) {
+        gStopOnAutoSave = newValue;
+        WUPSStorageAPI::Store(item->identifier, gStopOnAutoSave);
     }
 }
 
@@ -114,19 +122,16 @@ static void multipleValueCallback(ConfigItemMultipleValues *item, uint32_t newVa
         gCaptureResolution = (int32_t) newValue;
         WUPSStorageAPI::Store(item->identifier, gCaptureResolution);
         ApplyCaptureSettings();
-        // NotificationModule_AddInfoNotification(
-            // "DirectRecorder: Resolution changed. Takes effect on next game launch.");
     } else if (id == CAPTURE_SOURCE_CONFIG_STRING) {
         gCaptureSource = (int32_t) newValue;
         WUPSStorageAPI::Store(item->identifier, gCaptureSource);
-        // NotificationModule_AddInfoNotification(
-            // "DirectRecorder: Capture source changed. Takes effect on next game launch.");
     } else if (id == SECONDS_CONFIG_STRING) {
         gRingBufferSeconds = (int32_t) newValue;
         WUPSStorageAPI::Store(item->identifier, gRingBufferSeconds);
         ApplyCaptureSettings();
-        // NotificationModule_AddInfoNotification(
-            // "DirectRecorder: Buffer duration changed. Takes effect on next game launch.");
+    } else if (id == JPEG_QUALITY_CONFIG_STRING) {
+        gJpegQuality = (int32_t) newValue;
+        WUPSStorageAPI::Store(item->identifier, gJpegQuality);
     }
 }
 
@@ -162,7 +167,7 @@ static WUPSConfigAPICallbackStatus ConfigMenuOpenedCallback(WUPSConfigCategoryHa
             {RESOLUTION_428x240, "428x240  (~29MB)"},
             {RESOLUTION_480x270, "480x270  (default, ~36MB)"},
             {RESOLUTION_640x360, "640x360  (~64MB)"},
-            {RESOLUTION_854x480, "854x480  (native DRC, ~108MB)"},
+            {RESOLUTION_854x480, "854x480  (~108MB)"},
         };
         root.add(WUPSConfigItemMultipleValues::CreateFromValue(
             RESOLUTION_CONFIG_STRING,
@@ -173,6 +178,7 @@ static WUPSConfigAPICallbackStatus ConfigMenuOpenedCallback(WUPSConfigCategoryHa
 
         // Buffer duration
         constexpr WUPSConfigItemMultipleValues::ValuePair durationValues[] = {
+            { 15,  "15 seconds"},
             { 30,  "30 seconds  (default)"},
             { 45,  "45 seconds"},
         };
@@ -195,6 +201,38 @@ static WUPSConfigAPICallbackStatus ConfigMenuOpenedCallback(WUPSConfigCategoryHa
             CAPTURE_SOURCE_CONFIG_DEFAULT, gCaptureSource,
             sourceValues,
             &multipleValueCallback));
+
+        // JPEG quality
+        constexpr WUPSConfigItemMultipleValues::ValuePair qualValues[] = {
+            {30, "30  (small)"},
+            {40, "40"},
+            { 50, "50  (2src/30s)"},
+            { 60, "60  (rec.)"},
+            { 70, "70"},
+            { 80, "80"},
+            { 90, "90  (default)"},
+            {100, "100 (max qual)"},
+        };
+        root.add(WUPSConfigItemMultipleValues::CreateFromValue(
+            JPEG_QUALITY_CONFIG_STRING,
+            "JPEG quality",
+            JPEG_QUALITY_CONFIG_DEFAULT, gJpegQuality,
+            qualValues,
+            &multipleValueCallback));
+
+        // Save on buffer end toggle
+        root.add(WUPSConfigItemBoolean::Create(
+            SAVE_ON_BUFFER_END_CONFIG_STRING,
+            "Save on buffer end",
+            SAVE_ON_BUFFER_END_DEFAULT, gSaveOnBufferEnd,
+            &boolItemCallback));
+
+        // Stop recording after auto-save toggle
+        root.add(WUPSConfigItemBoolean::Create(
+            STOP_ON_AUTO_SAVE_CONFIG_STRING,
+            "Stop recording after saving",
+            STOP_ON_AUTO_SAVE_DEFAULT, gStopOnAutoSave,
+            &boolItemCallback));
 
 	} catch (std::exception &e) {
 	    OSReport("ScreenCapture config exception: %s\n", e.what());
@@ -247,6 +285,12 @@ void InitNotificationModule() {
                                       gRingBufferSeconds, SECONDS_CONFIG_DEFAULT);
     WUPSStorageAPI::GetOrStoreDefault(CAPTURE_SOURCE_CONFIG_STRING,
                                       gCaptureSource, CAPTURE_SOURCE_CONFIG_DEFAULT);
+    WUPSStorageAPI::GetOrStoreDefault(SAVE_ON_BUFFER_END_CONFIG_STRING,
+                                      gSaveOnBufferEnd, SAVE_ON_BUFFER_END_DEFAULT);
+    WUPSStorageAPI::GetOrStoreDefault(STOP_ON_AUTO_SAVE_CONFIG_STRING,
+                                      gStopOnAutoSave, STOP_ON_AUTO_SAVE_DEFAULT);
+    WUPSStorageAPI::GetOrStoreDefault(JPEG_QUALITY_CONFIG_STRING,
+                                      gJpegQuality, JPEG_QUALITY_CONFIG_DEFAULT);
     WUPSStorageAPI::SaveStorage();
 
     if (gCaptureResolution < 0 || gCaptureResolution > 2) gCaptureResolution = RESOLUTION_CONFIG_DEFAULT;

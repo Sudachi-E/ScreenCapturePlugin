@@ -43,6 +43,8 @@ DECL_FUNCTION(void, GX2CopyColorBufferToScanBuffer,
         if (captureDRC && scan_target == GX2_SCAN_TARGET_DRC0) {
             if (now - sLastDRCTick >= sMinTicks) {
                 sLastDRCTick = now;
+                { static uint32_t t = 0; if ((++t % 30) == 1)
+                    OSReport("[ScreenCapture] GX2Copy: DRC frame\n"); }
                 captureFrame((GX2ColorBuffer *) colorBuffer, gDRCSurfaceFormat, false);
             }
         }
@@ -50,6 +52,8 @@ DECL_FUNCTION(void, GX2CopyColorBufferToScanBuffer,
         if (captureTV && scan_target == GX2_SCAN_TARGET_TV) {
             if (now - sLastTVTick >= sMinTicks) {
                 sLastTVTick = now;
+                { static uint32_t t = 0; if ((++t % 30) == 1)
+                    OSReport("[ScreenCapture] GX2Copy: TV frame\n"); }
                 captureFrame((GX2ColorBuffer *) colorBuffer, gTVSurfaceFormat, true);
             }
         }
@@ -75,10 +79,9 @@ DECL_FUNCTION(void, GX2SetTVBuffer,
 static int sAIInitDMACount = 0;
 DECL_FUNCTION(void, AIInitDMA, void *buffer, uint32_t size) {
     sAIInitDMACount++;
-    if (sAIInitDMACount <= 3) {
-        OSReport("[FuncPatch] AIInitDMA #%d: buf=%p size=%u\n",
-                 sAIInitDMACount, buffer, size);
-    }
+    if (gEnabled) { static uint32_t t = 0; if ((++t % 60) == 1)
+        OSReport("[FuncPatch] AIInitDMA #%d: buf=%p size=%u gEnabled=%d\n",
+                 sAIInitDMACount, buffer, size, gEnabled); }
     if (gEnabled && buffer && size > 0) captureAudioBuffer(AUDIO_SRC_TV, buffer, size);
     real_AIInitDMA(buffer, size);
 }
@@ -86,10 +89,9 @@ DECL_FUNCTION(void, AIInitDMA, void *buffer, uint32_t size) {
 static int sAI2InitDMACount = 0;
 DECL_FUNCTION(void, AI2InitDMA, void *buffer, uint32_t size) {
     sAI2InitDMACount++;
-    if (sAI2InitDMACount <= 3) {
-        OSReport("[FuncPatch] AI2InitDMA #%d: buf=%p size=%u\n",
-                 sAI2InitDMACount, buffer, size);
-    }
+    if (gEnabled) { static uint32_t t = 0; if ((++t % 60) == 1)
+        OSReport("[FuncPatch] AI2InitDMA #%d: buf=%p size=%u gEnabled=%d\n",
+                 sAI2InitDMACount, buffer, size, gEnabled); }
     if (gEnabled && buffer && size > 0) captureAudioBuffer(AUDIO_SRC_DRC, buffer, size);
     real_AI2InitDMA(buffer, size);
 }
@@ -97,10 +99,9 @@ DECL_FUNCTION(void, AI2InitDMA, void *buffer, uint32_t size) {
 static int sAI2InitDMA2Count = 0;
 DECL_FUNCTION(void, AI2InitDMA2, void *buffer, uint32_t size) {
     sAI2InitDMA2Count++;
-    if (sAI2InitDMA2Count <= 3) {
-        OSReport("[FuncPatch] AI2InitDMA2 #%d: buf=%p size=%u\n",
-                 sAI2InitDMA2Count, buffer, size);
-    }
+    if (gEnabled) { static uint32_t t = 0; if ((++t % 60) == 1)
+        OSReport("[FuncPatch] AI2InitDMA2 #%d: buf=%p size=%u gEnabled=%d\n",
+                 sAI2InitDMA2Count, buffer, size, gEnabled); }
     if (gEnabled && buffer && size > 0) captureAudioBuffer(AUDIO_SRC_DRC, buffer, size);
     real_AI2InitDMA2(buffer, size);
 }
@@ -108,10 +109,9 @@ DECL_FUNCTION(void, AI2InitDMA2, void *buffer, uint32_t size) {
 static int sAIInitDRCDMACount = 0;
 DECL_FUNCTION(void, AIInitDRCDMA, void *buffer, uint32_t size) {
     sAIInitDRCDMACount++;
-    if (sAIInitDRCDMACount <= 3) {
-        OSReport("[FuncPatch] AIInitDRCDMA #%d: buf=%p size=%u\n",
-                 sAIInitDRCDMACount, buffer, size);
-    }
+    if (gEnabled) { static uint32_t t = 0; if ((++t % 60) == 1)
+        OSReport("[FuncPatch] AIInitDRCDMA #%d: buf=%p size=%u gEnabled=%d\n",
+                 sAIInitDRCDMACount, buffer, size, gEnabled); }
     if (gEnabled && buffer && size > 0) captureAudioBuffer(AUDIO_SRC_DRC, buffer, size);
     real_AIInitDRCDMA(buffer, size);
 }
@@ -119,10 +119,9 @@ DECL_FUNCTION(void, AIInitDRCDMA, void *buffer, uint32_t size) {
 static int sAIInitTVOrDRCDMACount = 0;
 DECL_FUNCTION(void, AIInitTVOrDRCDMA, void *buffer, uint32_t size) {
     sAIInitTVOrDRCDMACount++;
-    if (sAIInitTVOrDRCDMACount <= 3) {
-        OSReport("[FuncPatch] AIInitTVOrDRCDMA #%d: buf=%p size=%u\n",
-                 sAIInitTVOrDRCDMACount, buffer, size);
-    }
+    if (gEnabled) { static uint32_t t = 0; if ((++t % 60) == 1)
+        OSReport("[FuncPatch] AIInitTVOrDRCDMA #%d: buf=%p size=%u gEnabled=%d\n",
+                 sAIInitTVOrDRCDMACount, buffer, size, gEnabled); }
     if (gEnabled && buffer && size > 0) {
         captureAudioBuffer(AUDIO_SRC_TV,  buffer, size);
         captureAudioBuffer(AUDIO_SRC_DRC, buffer, size);

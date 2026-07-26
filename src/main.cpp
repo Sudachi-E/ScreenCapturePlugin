@@ -75,7 +75,8 @@ ON_APPLICATION_START() {
     gEnabled             = false;
     gInForeground        = true;
     gCapturing           = gEnabled;
-    gIsInGame            = !(OSGetTitleID());
+    gTitleID             = OSGetTitleID();
+    gIsInGame            = !(gTitleID);
     updateAppName();
     resetCaptureTiming();
 

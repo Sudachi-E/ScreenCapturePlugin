@@ -3,6 +3,7 @@
 #include "ring_buffer.h"
 #include "retain_vars.hpp"
 #include "audio_capture.h"
+#include "save_thread.h"
 #include "utils/logger.h"
 #include <gx2/event.h>
 #include <gx2/mem.h>
@@ -18,6 +19,7 @@
 #include <malloc.h>
 #include <string.h>
 #include <turbojpeg.h>
+#include <notifications/notifications.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -241,6 +243,10 @@ static void syncAndSend(int srcIdx) {
     PoolSurface *ps = &sPool[pIdx];
     GX2ColorBuffer *buf = &ps->buffer;
 
+    { static uint32_t syncThrottle = 0; if ((++syncThrottle % 30) == 1)
+        OSReport("[ScreenCapture] syncAndSend: src=%d pIdx=%d ts=%llu\n",
+                 srcIdx, pIdx, (unsigned long long)ps->gpuTimestamp); }
+
     if (ps->gpuTimestamp > 0) {
         OSTime tCopy = OSGetTime();
         GX2WaitTimeStamp(ps->gpuTimestamp);
@@ -267,10 +273,13 @@ static void syncAndSend(int srcIdx) {
         msg.message = (void *) cs;
         OSAddAtomic(&sEncodeInFlight, 1);
         if (!OSSendMessage(&sEncodeQueue, &msg, OS_MESSAGE_FLAGS_NONE)) {
+            OSReport("[ScreenCapture] syncAndSend: QUEUE FULL! src=%d\n", srcIdx);
             OSAddAtomic(&sEncodeInFlight, -1);
             ps->busy = false;
             free(cs);
         }
+    } else {
+        OSReport("[ScreenCapture] syncAndSend: malloc FAILED for CaptureSurface\n");
     }
 
     sPendingSyncIdx[srcIdx] = -1;
@@ -299,10 +308,18 @@ static int32_t encodeThreadEntry([[maybe_unused]] int argc, const char **argv) {
     OSMessage msg;
     while (OSReceiveMessage(queue, &msg, OS_MESSAGE_FLAGS_BLOCKING)) {
         sProf.encWaitUs += OSTicksToMicroseconds(OSGetTime() - tWait);
-        if (msg.message == ENCODE_CMD_STOP) break;
+        { static uint32_t hb = 0; if ((++hb % 60) == 1)
+            OSReport("[ScreenCapture] Encode: alive, ringBuf count=%u\n", gRingBuffer.count()); }
+        if (msg.message == ENCODE_CMD_STOP) {
+            OSReport("[ScreenCapture] Encode: received STOP\n");
+            break;
+        }
 
         auto *cs = (CaptureSurface *) msg.message;
-        if (!cs) { tWait = OSGetTime(); continue; }
+        if (!cs) {
+            OSReport("[ScreenCapture] Encode: NULL cs!\n");
+            tWait = OSGetTime(); continue;
+        }
 
         uint8_t *px = (uint8_t *) cs->buffer->surface.image;
         uint32_t  w = cs->width;
@@ -331,9 +348,12 @@ static int32_t encodeThreadEntry([[maybe_unused]] int argc, const char **argv) {
             prevWidth  = w;
             prevHeight = h;
             maxJpegSize = tjBufSize((int)w, (int)h, TJSAMP_420);
+            OSReport("[SC] Encode: tjBufSize(%u,%u,420)=%lu\n", w, h, maxJpegSize);
             if (jpegBuf) free(jpegBuf);
             jpegBuf = (uint8_t *) malloc(maxJpegSize);
             if (!jpegBuf) {
+                OSReport("[ScreenCapture] Encode: JPEG BUF MALLOC FAILED! size=%lu w=%u h=%u\n",
+                         maxJpegSize, w, h);
                 sPool[cs->poolIdx].busy = false;
                 free(cs);
                 sProf.jpegUs += OSTicksToMicroseconds(OSGetTime() - tJpeg);
@@ -345,14 +365,60 @@ static int32_t encodeThreadEntry([[maybe_unused]] int argc, const char **argv) {
         unsigned long jpegSize = 0;
         unsigned char *outBuf = jpegBuf;
 
+        OSTime tJpegStart = OSGetTime();
         int ret = tjCompress2(tj, px, (int) w, (int)(p * 4), (int) h,
                               TJPF_RGBX, &outBuf, &jpegSize,
-                              TJSAMP_420, CAPTURE_JPEG_QUALITY,
+                               TJSAMP_420, gJpegQuality,
                               TJFLAG_NOREALLOC);
+        { static uint32_t jlog = 0; if ((++jlog % 30) == 1) {
+            OSTime tJpegEnd = OSGetTime();
+            OSReport("[ScreenCapture] Encode: JPEG %ux%u took %llu us, size=%lu\n",
+                     w, h, (unsigned long long)OSTicksToMicroseconds(tJpegEnd - tJpegStart), jpegSize);
+        }}
 
         sPool[cs->poolIdx].busy = false;
 
         if (ret != 0 || jpegSize == 0) {
+            OSReport("[ScreenCapture] Encode: JPEG FAILED ret=%d size=%lu "
+                     "w=%u h=%u pitch=%u maxSize=%lu jpegBuf=%p outBuf=%p px=%p\n",
+                     ret, jpegSize, w, h, p, maxJpegSize, (void*)jpegBuf, (void*)outBuf, (void*)px);
+            const char *tjErr = tjGetErrorStr();
+            if (tjErr) OSReport("[ScreenCapture] Encode: tjError: %s\n", tjErr);
+
+            // If tjCompress2 ran out of memory, free the ring buffers to recover heap
+            if (tjErr && strstr(tjErr, "Insufficient memory")) {
+                OSReport("[SC] Encode: JPEG OOM — cycling ring buffers to free memory\n");
+                bool extracted = gRingBuffer.cycleAndSave();
+                bool otherExtracted = gRingBufferTV.cycleAndSave();
+                if (extracted || otherExtracted) {
+                    OSReport("[SC] Encode: JPEG OOM — extracting audio snapshots\n");
+                    gCycleAudioWritePosDRC = getAudioWritePos(AUDIO_SRC_DRC);
+                    gCycleAudioWritePosTV  = getAudioWritePos(AUDIO_SRC_TV);
+                    free(gPendingAudioDRC); gPendingAudioDRC = nullptr;
+                    free(gPendingAudioTV);  gPendingAudioTV  = nullptr;
+                    auto snap = [](AudioSource src, int16_t **out, size_t *num, uint32_t *rate) {
+                        const int16_t *b = nullptr; size_t s = 0; uint32_t r = 0;
+                        getAudioData(src, &b, &s, &r);
+                        size_t bytes = s * sizeof(int16_t);
+                        *out = (int16_t *) malloc(bytes);
+                        if (*out) { memcpy(*out, b, bytes); *num = s; *rate = r; return true; }
+                        else { *num = 0; *rate = 0; return false; }
+                    };
+                    snap(AUDIO_SRC_DRC, &gPendingAudioDRC, &gPendingAudioDRCSamps, &gPendingAudioDRCRate);
+                    snap(AUDIO_SRC_TV,  &gPendingAudioTV,  &gPendingAudioTVSamps,  &gPendingAudioTVRate);
+                    gUsePendingSave = true;
+                    OSMemoryBarrier();
+                    requestSave();
+                }
+                OSReport("[SC] Encode: JPEG OOM — emergencyCycle both buffers\n");
+                gRingBuffer.emergencyCycle();
+                gRingBufferTV.emergencyCycle();
+                gRingBuffer.allocSlots();
+                gRingBufferTV.allocSlots();
+                NotificationModule_AddErrorNotification(
+                    "\ue01e ScreenCapture: Low memory! Some frames dropped. Reduce buffer duration.");
+            }
+
             free(cs);
             sProf.jpegUs += OSTicksToMicroseconds(OSGetTime() - tJpeg);
             sProf.encUs  += OSTicksToMicroseconds(OSGetTime() - tEncFrame);
@@ -361,13 +427,140 @@ static int32_t encodeThreadEntry([[maybe_unused]] int argc, const char **argv) {
         }
 
         uint8_t *copy = (uint8_t *) malloc(jpegSize);
+        if (!copy) {
+            RingBuffer &buf = cs->isTV ? gRingBufferTV : gRingBuffer;
+            RingBuffer &other = cs->isTV ? gRingBuffer : gRingBufferTV;
+            OSReport("[SC] OOM: MALLOC FAILED! size=%lu src=%s bufCount=%u otherCount=%u gSaveReq=%d\n",
+                     jpegSize, cs->isTV ? "TV" : "DRC", buf.count(), other.count(), gSaveRequested);
+
+            bool thisExtracted = false;
+            bool otherExtracted = false;
+            if (!gSaveRequested) {
+                OSReport("[SC] OOM: gSaveReq=0, attempting cycleAndSave on both buffers\n");
+                thisExtracted = buf.cycleAndSave();
+                otherExtracted = other.cycleAndSave();
+                OSReport("[SC] OOM: thisExtracted=%d otherExtracted=%d\n", thisExtracted, otherExtracted);
+            } else {
+                OSReport("[SC] OOM: gSaveReq=1, SKIPPING cycleAndSave (save in progress)\n");
+            }
+            if (thisExtracted || otherExtracted) {
+                OSReport("[SC] OOM: extracting audio snapshots\n");
+                gCycleAudioWritePosDRC = getAudioWritePos(AUDIO_SRC_DRC);
+                gCycleAudioWritePosTV  = getAudioWritePos(AUDIO_SRC_TV);
+                free(gPendingAudioDRC);
+                free(gPendingAudioTV);
+                auto snap = [](AudioSource src, int16_t **out, size_t *num, uint32_t *rate) {
+                    const int16_t *b = nullptr; size_t s = 0; uint32_t r = 0;
+                    getAudioData(src, &b, &s, &r);
+                    size_t bytes = s * sizeof(int16_t);
+                    *out = (int16_t *) malloc(bytes);
+                    if (*out) { memcpy(*out, b, bytes); *num = s; *rate = r; return true; }
+                    else { *num = 0; *rate = 0; return false; }
+                };
+                bool snapDrc = snap(AUDIO_SRC_DRC, &gPendingAudioDRC, &gPendingAudioDRCSamps, &gPendingAudioDRCRate);
+                bool snapTv  = snap(AUDIO_SRC_TV,  &gPendingAudioTV,  &gPendingAudioTVSamps,  &gPendingAudioTVRate);
+                OSReport("[SC] OOM: audio snapshots DRC=%d TV=%d\n", snapDrc, snapTv);
+                if (snapDrc && snapTv) {
+                    clearAudioBuffer();
+                    OSReport("[SC] OOM: cleared audio buffer\n");
+                }
+                gUsePendingSave = true;
+                OSMemoryBarrier();
+                OSReport("[SC] OOM: calling requestSave()\n");
+                NotificationModule_AddErrorNotification(
+                    "\ue01e ScreenCapture: Out of memory! Saving partial buffer. Reduce resolution, buffer duration, or record quality in settings.");
+                requestSave();
+                OSReport("[SC] OOM: requestSave() returned\n");
+            } else {
+                OSReport("[SC] OOM: NOT extracted, freeing and notifying\n");
+                NotificationModule_AddErrorNotification(
+                    "\ue01e ScreenCapture: Out of memory! Could not save buffer. Reduce resolution, buffer duration, or record quality in settings.");
+            }
+
+            OSReport("[SC] OOM: emergencyCycle both buffers\n");
+            buf.emergencyCycle();
+            other.emergencyCycle();
+            // Re-allocate slots so subsequent pushes can succeed
+            buf.allocSlots();
+            other.allocSlots();
+            OSReport("[SC] OOM: after allocSlots DRC=%u TV=%u\n",
+                     gRingBuffer.count(), gRingBufferTV.count());
+            copy = (uint8_t *) malloc(jpegSize);
+            if (!copy) {
+                OSReport("[SC] OOM: retry malloc STILL FAILED, dropping frame\n");
+            } else {
+                OSReport("[SC] OOM: retry malloc OK (%lu bytes)\n", jpegSize);
+            }
+        }
         if (copy) {
             memcpy(copy, jpegBuf, jpegSize);
             RingBuffer &buf = cs->isTV ? gRingBufferTV : gRingBuffer;
             bool cycled = buf.push(copy, (size_t) jpegSize, cs->timestamp,
                                    cs->audioWritePos, w, h);
+
+            uint32_t cnt = buf.count();
+            OSReport("[SC] Encode: pushed to %s, cycled=%d, cnt=%u/%u\n",
+                     cs->isTV ? "TV" : "DRC", cycled, cnt, gRingBufferFrameCount);
+
             if (cycled) {
-                clearAudioBuffer();
+                if (gSaveOnBufferEnd && !gSaveRequested) {
+                    OSReport("[SC] Encode: CYCLE — starting auto-save\n");
+                    gCycleAudioWritePosDRC = getAudioWritePos(AUDIO_SRC_DRC);
+                    gCycleAudioWritePosTV  = getAudioWritePos(AUDIO_SRC_TV);
+                    OSReport("[SC] Encode: audioWritePos DRC=%llu TV=%llu\n",
+                             (unsigned long long)gCycleAudioWritePosDRC,
+                             (unsigned long long)gCycleAudioWritePosTV);
+
+                    auto snapshotAudio = [](AudioSource src,
+                                            int16_t **outSamples,
+                                            size_t *outNum,
+                                            uint32_t *outRate) {
+                        const int16_t *buf = nullptr;
+                        size_t samps = 0;
+                        uint32_t rate = 0;
+                        getAudioData(src, &buf, &samps, &rate);
+                        size_t bytes = samps * sizeof(int16_t);
+                        *outSamples = (int16_t *) malloc(bytes);
+                        if (*outSamples) {
+                            memcpy(*outSamples, buf, bytes);
+                            *outNum = samps;
+                            *outRate = rate;
+                            OSReport("[SC] Encode: audio snapshot src=%d OK samps=%u\n", (int)src, (uint32_t)samps);
+                            return true;
+                        } else {
+                            OSReport("[SC] Encode: audio snapshot src=%d MALLOC FAILED!\n", (int)src);
+                            *outNum = 0;
+                            *outRate = 0;
+                            return false;
+                        }
+                    };
+                    free(gPendingAudioDRC);
+                    free(gPendingAudioTV);
+                    bool drcSnapOk = snapshotAudio(AUDIO_SRC_DRC,
+                                                   &gPendingAudioDRC, &gPendingAudioDRCSamps, &gPendingAudioDRCRate);
+                    bool tvSnapOk  = snapshotAudio(AUDIO_SRC_TV,
+                                                   &gPendingAudioTV, &gPendingAudioTVSamps, &gPendingAudioTVRate);
+                    OSReport("[SC] Encode: audio snapshots DRC=%d TV=%d\n", drcSnapOk, tvSnapOk);
+
+                    if (drcSnapOk && tvSnapOk) {
+                        clearAudioBuffer();
+                        OSReport("[SC] Encode: cleared audio buffer\n");
+                    }
+                    gUsePendingSave = true;
+                    OSMemoryBarrier();
+                    OSReport("[SC] Encode: calling requestSave()\n");
+                    requestSave();
+                    OSReport("[SC] Encode: requestSave() returned, gSaveReq=%d\n", gSaveRequested);
+                } else {
+                    OSReport("[SC] Encode: CYCLE — skip save (saveOnEnd=%d gSaveReq=%d)\n",
+                             gSaveOnBufferEnd, gSaveRequested);
+                    if (gSaveOnBufferEnd && gSaveRequested) {
+                        NotificationModule_AddInfoNotification(
+                            "\ue01e ScreenCapture: Buffer full while saving! Some frames were lost. Try reducing buffer duration.");
+                    }
+                    clearAudioBuffer();
+                    OSReport("[SC] Encode: cleared audio buffer after skip\n");
+                }
             }
         }
 
@@ -451,11 +644,17 @@ void captureFrame(GX2ColorBuffer *srcBuffer, GX2SurfaceFormat srcFormat, bool is
 
     if (!sPoolInited) {
         initSurfacePool();
-        if (!sPoolInited) return;
+        if (!sPoolInited) {
+            OSReport("[ScreenCapture] captureFrame: pool not inited\n");
+            return;
+        }
     }
 
     int srcIdx = isTV ? 1 : 0;
 
+    { static uint32_t throttle = 0; if ((++throttle % 10) == 1)
+        OSReport("[ScreenCapture] captureFrame: src=%s encInFlight=%d\n",
+                 isTV ? "TV" : "DRC", sEncodeInFlight); }
     syncAndSend(srcIdx);
 
     int32_t otherPending = (srcIdx == 0) ? sPendingSyncIdx[1] : sPendingSyncIdx[0];
@@ -469,6 +668,11 @@ void captureFrame(GX2ColorBuffer *srcBuffer, GX2SurfaceFormat srcFormat, bool is
     }
 
     if (idx >= SURFACE_POOL_SIZE) {
+        OSReport("[ScreenCapture] captureFrame: NO FREE SURFACE! pendingSync=[%d,%d] encInFlight=%d\n",
+                 sPendingSyncIdx[0], sPendingSyncIdx[1], sEncodeInFlight);
+        for (uint32_t i = 0; i < SURFACE_POOL_SIZE; i++) {
+            OSReport("  pool[%u]: busy=%d\n", i, sPool[i].busy);
+        }
         sProf.frameCount++;
         return;
     }

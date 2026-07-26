@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <wups/button_combo/defines.h>
 
-#define WIIU_VIDEO_PATH "fs:/vol/external01/wiiu/videos/"
+#define WIIU_VIDEO_PATH "fs:/vol/external01/wiiu/screencaptures/"
 
 #define RING_BUFFER_SECONDS_MAX  45
 #define RING_BUFFER_FRAMES_MAX   (30 * RING_BUFFER_SECONDS_MAX)
@@ -18,8 +18,6 @@
 #define CAPTURE_SOURCE_TV    1
 #define CAPTURE_SOURCE_BOTH  2
 
-// JPEG quality — fixed, not user-configurable for the time being (for testing)
-#define CAPTURE_JPEG_QUALITY  40
 
 #define DOWNSCALE_THRESHOLD_PX  230400
 

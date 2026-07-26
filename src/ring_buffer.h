@@ -15,6 +15,12 @@ struct CapturedFrame {
     uint32_t height;
 };
 
+// A snapshot of ring buffer contents extracted at a cycle boundary, transferred to the save thread.
+struct PendingSave {
+    CapturedFrame *frames = nullptr;
+    uint32_t       count  = 0;
+};
+
 // Thread-safe ring buffer of CapturedFrame entries. When full, the oldest frame is overwritten (freed first)
 class RingBuffer {
 public:
@@ -37,6 +43,13 @@ public:
 
     bool allocSlots();
 
+    // Transfer pending save data (frames from a completed cycle) to caller.
+    // Returns false if no pending save is available.
+    bool takePendingSave(PendingSave &out);
+    void freePendingSave();
+    void emergencyCycle();
+    bool cycleAndSave();
+
 private:
     // Capacity driven by gRingBufferFrameCount (set from config menu)
     static constexpr uint32_t CAPACITY = RING_BUFFER_FRAMES_MAX;
@@ -45,6 +58,8 @@ private:
     uint32_t       mHead;
     uint32_t       mCount;
     OSMutex        mMutex;
+
+    PendingSave    mPendingSave;
 };
 
 extern RingBuffer gRingBuffer;
