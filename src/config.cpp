@@ -164,10 +164,10 @@ static WUPSConfigAPICallbackStatus ConfigMenuOpenedCallback(WUPSConfigCategoryHa
 
         // Resolution
         constexpr WUPSConfigItemMultipleValues::ValuePair resValues[] = {
-            {RESOLUTION_428x240, "428x240  (~29MB)"},
-            {RESOLUTION_480x270, "480x270  (default, ~36MB)"},
-            {RESOLUTION_640x360, "640x360  (~64MB)"},
-            {RESOLUTION_854x480, "854x480  (~108MB)"},
+            {RESOLUTION_428x240, "428x240"},
+            {RESOLUTION_480x270, "480x270  (default)"},
+            {RESOLUTION_640x360, "640x360"},
+            {RESOLUTION_854x480, "854x480"},
         };
         root.add(WUPSConfigItemMultipleValues::CreateFromValue(
             RESOLUTION_CONFIG_STRING,
