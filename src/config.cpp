@@ -146,20 +146,20 @@ static WUPSConfigAPICallbackStatus ConfigMenuOpenedCallback(WUPSConfigCategoryHa
             ENABLED_CONFIG_DEFAULT, gEnabled,
             &boolItemCallback));
 
-        // Save button combo
-        root.add(WUPSConfigItemButtonCombo::Create(
-            BUTTON_COMBO_CONFIG_STRING,
-            "Save video combo",
-            (WUPSButtonCombo_Buttons) BUTTON_COMBO_CONFIG_DEFAULT,
-            gButtonComboHandle,
-            &buttonComboItemChanged));
-
         // Record toggle button combo
         root.add(WUPSConfigItemButtonCombo::Create(
             RECORD_COMBO_CONFIG_STRING,
             "Start/Stop recording combo",
             (WUPSButtonCombo_Buttons) RECORD_COMBO_CONFIG_DEFAULT,
             gRecordButtonComboHandle,
+            &buttonComboItemChanged));
+
+        // Save button combo
+        root.add(WUPSConfigItemButtonCombo::Create(
+            BUTTON_COMBO_CONFIG_STRING,
+            "Save video combo",
+            (WUPSButtonCombo_Buttons) BUTTON_COMBO_CONFIG_DEFAULT,
+            gButtonComboHandle,
             &buttonComboItemChanged));
 
         // Resolution
@@ -189,7 +189,25 @@ static WUPSConfigAPICallbackStatus ConfigMenuOpenedCallback(WUPSConfigCategoryHa
             durationValues,
             &multipleValueCallback));
 
-        // Capture source
+        // JPEG quality
+        constexpr WUPSConfigItemMultipleValues::ValuePair qualValues[] = {
+            {30, "30"},
+            {40, "40 (default)"},
+            { 50, "50"},
+            { 60, "60"},
+            { 70, "70"},
+            { 80, "80"},
+            { 90, "90"},
+            {100, "100"},
+        };
+        root.add(WUPSConfigItemMultipleValues::CreateFromValue(
+            JPEG_QUALITY_CONFIG_STRING,
+            "JPEG quality",
+            JPEG_QUALITY_CONFIG_DEFAULT, gJpegQuality,
+            qualValues,
+            &multipleValueCallback));
+
+            // Capture source
         constexpr WUPSConfigItemMultipleValues::ValuePair sourceValues[] = {
             {CAPTURE_SOURCE_DRC,  "Gamepad only"},
             {CAPTURE_SOURCE_TV,   "TV only"},
@@ -200,24 +218,6 @@ static WUPSConfigAPICallbackStatus ConfigMenuOpenedCallback(WUPSConfigCategoryHa
             "Capture source",
             CAPTURE_SOURCE_CONFIG_DEFAULT, gCaptureSource,
             sourceValues,
-            &multipleValueCallback));
-
-        // JPEG quality
-        constexpr WUPSConfigItemMultipleValues::ValuePair qualValues[] = {
-            {30, "30  (small)"},
-            {40, "40"},
-            { 50, "50  (2src/30s)"},
-            { 60, "60  (rec.)"},
-            { 70, "70"},
-            { 80, "80"},
-            { 90, "90  (default)"},
-            {100, "100 (max qual)"},
-        };
-        root.add(WUPSConfigItemMultipleValues::CreateFromValue(
-            JPEG_QUALITY_CONFIG_STRING,
-            "JPEG quality",
-            JPEG_QUALITY_CONFIG_DEFAULT, gJpegQuality,
-            qualValues,
             &multipleValueCallback));
 
         // Save on buffer end toggle
