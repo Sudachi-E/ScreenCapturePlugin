@@ -30,10 +30,20 @@ bool RingBuffer::push(uint8_t *jpegData, size_t jpegSize, uint64_t timestamp, ui
     OSLockMutex(&mMutex);
 
     bool startedNewCycle = false;
-    if (gRingBufferFrameCount > 0 && mCount >= gRingBufferFrameCount) {
+    bool timeCycle = false;
+    if (mCount > 0 && gRingBufferSeconds > 0) {
+        uint64_t bufferTicks = (uint64_t) gRingBufferSeconds * (uint64_t) OSSecondsToTicks(1);
+        uint64_t firstTs     = mSlots[mHead].timestamp;
+        if (bufferTicks > 0 && timestamp >= firstTs &&
+            (uint64_t)(timestamp - firstTs) >= bufferTicks) {
+            timeCycle = true;
+        }
+    }
+    bool frameCapCycle = (gRingBufferFrameCount > 0 && mCount >= gRingBufferFrameCount);
+    if (timeCycle || frameCapCycle) {
         startedNewCycle = true;
-        OSReport("[SC] push: CYCLE at count=%u/%u, saveOnEnd=%d, pending=%p, gSaveReq=%d\n",
-                 mCount, gRingBufferFrameCount, gSaveOnBufferEnd, (void*)mPendingSave.frames, gSaveRequested);
+        OSReport("[SC] push: CYCLE (time=%d cap=%d) at count=%u/%u, saveOnEnd=%d, pending=%p, gSaveReq=%d\n",
+                 timeCycle, frameCapCycle, mCount, gRingBufferFrameCount, gSaveOnBufferEnd, (void*)mPendingSave.frames, gSaveRequested);
 
         if (gSaveOnBufferEnd && !mPendingSave.frames) {
             OSReport("[SC] push: EXTRACTING %u frames to pending save\n", mCount);

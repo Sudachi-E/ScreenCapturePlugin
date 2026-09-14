@@ -54,8 +54,6 @@ struct IdxEntry {
     uint32_t size;
 };
 
-static uint32_t  *sOutBuf   = nullptr;
-static uint32_t   sOutCap   = 0;
 static IdxEntry  *sIdxBuf   = nullptr;
 static uint32_t   sIdxCap   = 0;
 
@@ -87,48 +85,18 @@ static bool writeAVIImpl(const std::string &path, const FrameAccess &fa,
         return false;
     }
 
-    constexpr uint32_t framePeriodUs = 1000000u / 30;
-
-    uint32_t neededOut = fa.count * 2;
-    if (neededOut > sOutCap) {
-        uint32_t *newBuf = (uint32_t *) realloc(sOutBuf, neededOut * sizeof(uint32_t));
-        if (!newBuf) { OSReport("[SC] writeAVI: OOM outFrames\n"); return false; }
-        sOutBuf = newBuf;
-        sOutCap = neededOut;
-    }
-
-    uint32_t outCount = 0;
-    for (uint32_t i = 0; i < fa.count; i++) {
-        if (outCount >= sOutCap) {
-            uint32_t newCap = sOutCap ? sOutCap * 2 : 256;
-            uint32_t *newBuf = (uint32_t *) realloc(sOutBuf, newCap * sizeof(uint32_t));
-            if (!newBuf) { OSReport("[SC] writeAVI: OOM outFrames (grow)\n"); return false; }
-            sOutBuf = newBuf;
-            sOutCap = newCap;
-        }
-        sOutBuf[outCount++] = i;
-
-        if (i + 1 < fa.count) {
-            uint64_t dt   = fa.frames[i + 1].timestamp - fa.frames[i].timestamp;
-            uint32_t dtUs = (uint32_t) OSTicksToMicroseconds(dt);
-            if (dtUs > framePeriodUs) {
-                uint32_t extraFrames = (dtUs + framePeriodUs / 2) / framePeriodUs - 1;
-                if (extraFrames > 30) extraFrames = 30;
-                for (uint32_t d = 0; d < extraFrames; d++) {
-                    if (outCount >= sOutCap) {
-                        uint32_t newCap = sOutCap ? sOutCap * 2 : 256;
-                        uint32_t *newBuf = (uint32_t *) realloc(sOutBuf, newCap * sizeof(uint32_t));
-                        if (!newBuf) { OSReport("[SC] writeAVI: OOM outFrames (dup)\n"); return false; }
-                        sOutBuf = newBuf;
-                        sOutCap = newCap;
-                    }
-                    sOutBuf[outCount++] = i;
-                }
-            }
+    uint32_t framePeriodUs = 1000000u / 30;
+    if (fa.count > 1) {
+        uint64_t totalTicks = fa.frames[fa.count - 1].timestamp - fa.frames[0].timestamp;
+        uint64_t totalUs    = OSTicksToMicroseconds(totalTicks);
+        if (totalUs > 0) {
+            framePeriodUs = (uint32_t)(totalUs / (fa.count - 1));
+            if (framePeriodUs < 16666)  framePeriodUs = 16666;
+            if (framePeriodUs > 100000) framePeriodUs = 100000;
         }
     }
 
-    uint32_t totalFrames = outCount;
+    uint32_t totalFrames = fa.count;
 
     uint32_t maxFrameSize = 0;
     for (uint32_t i = 0; i < fa.count; i++)
@@ -158,7 +126,7 @@ static bool writeAVIImpl(const std::string &path, const FrameAccess &fa,
     {
         long sz = beginChunk(fp, "avih");
         writeU32LE(fp, framePeriodUs);
-        writeU32LE(fp, maxFrameSize * 30u + audioByteSize / (totalFrames > 1 ? totalFrames : 1));
+        writeU32LE(fp, maxFrameSize * (1000000u / framePeriodUs) + audioByteSize / (totalFrames > 1 ? totalFrames : 1));
         writeU32LE(fp, 0); writeU32LE(fp, 0x10);
         writeU32LE(fp, totalFrames); writeU32LE(fp, 0);
         writeU32LE(fp, hasAudio ? 2u : 1u); writeU32LE(fp, maxFrameSize);
@@ -174,7 +142,7 @@ static bool writeAVIImpl(const std::string &path, const FrameAccess &fa,
             long sz = beginChunk(fp, "strh");
             writeFourCC(fp, "vids"); writeFourCC(fp, "MJPG");
             writeU32LE(fp, 0); writeU16LE(fp, 0); writeU16LE(fp, 0);
-            writeU32LE(fp, 0); writeU32LE(fp, 1); writeU32LE(fp, 30u);
+            writeU32LE(fp, 0); writeU32LE(fp, framePeriodUs); writeU32LE(fp, 1000000u);
             writeU32LE(fp, 0); writeU32LE(fp, totalFrames);
             writeU32LE(fp, maxFrameSize); writeU32LE(fp, (uint32_t)-1);
             writeU32LE(fp, 0); writeU16LE(fp, 0); writeU16LE(fp, 0);
@@ -224,7 +192,7 @@ static bool writeAVIImpl(const std::string &path, const FrameAccess &fa,
     }
 
     for (uint32_t i = 0; i < totalFrames; i++) {
-        const CapturedFrame *frame = &fa.frames[sOutBuf[i]];
+        const CapturedFrame *frame = &fa.frames[i];
         uint32_t chunkOffset = (uint32_t)(ftell(fp) - moviDataStart);
         writeFourCC(fp, "00dc");
         writeU32LE(fp, (uint32_t)frame->size);

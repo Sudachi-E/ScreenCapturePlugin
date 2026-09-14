@@ -294,7 +294,7 @@ void InitNotificationModule() {
     WUPSStorageAPI::SaveStorage();
 
     if (gCaptureResolution < 0 || gCaptureResolution > 2) gCaptureResolution = RESOLUTION_CONFIG_DEFAULT;
-    if (gRingBufferSeconds < 30 || gRingBufferSeconds > RING_BUFFER_SECONDS_MAX)
+    if (gRingBufferSeconds < 15 || gRingBufferSeconds > RING_BUFFER_SECONDS_MAX)
         gRingBufferSeconds = SECONDS_CONFIG_DEFAULT;
     if (gCaptureSource < 0 || gCaptureSource > 2) gCaptureSource = CAPTURE_SOURCE_CONFIG_DEFAULT;
 
