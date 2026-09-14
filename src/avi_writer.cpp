@@ -85,18 +85,39 @@ static bool writeAVIImpl(const std::string &path, const FrameAccess &fa,
         return false;
     }
 
-    uint32_t framePeriodUs = 1000000u / 30;
+    uint64_t firstTs   = fa.frames[0].timestamp;
+    uint64_t lastTs    = fa.frames[fa.count - 1].timestamp;
+
+    uint64_t cfrTicks  = OSMicrosecondsToTicks(33333u);
+    uint64_t baseTicks = cfrTicks;
+
     if (fa.count > 1) {
-        uint64_t totalTicks = fa.frames[fa.count - 1].timestamp - fa.frames[0].timestamp;
-        uint64_t totalUs    = OSTicksToMicroseconds(totalTicks);
-        if (totalUs > 0) {
-            framePeriodUs = (uint32_t)(totalUs / (fa.count - 1));
-            if (framePeriodUs < 16666)  framePeriodUs = 16666;
-            if (framePeriodUs > 100000) framePeriodUs = 100000;
+        uint64_t minGap = 0;
+        for (uint32_t i = 1; i < fa.count; i++) {
+            uint64_t gap = fa.frames[i].timestamp - fa.frames[i - 1].timestamp;
+            if (gap > 0 && (minGap == 0 || gap < minGap)) minGap = gap;
         }
+        if (minGap != 0) {
+            uint64_t minTicks = OSMicrosecondsToTicks(16666u);
+            uint64_t maxTicks = OSMicrosecondsToTicks(100000u);
+            if (minGap < minTicks) minGap = minTicks;
+            if (minGap > maxTicks) minGap = maxTicks;
+            cfrTicks = minGap;
+        }
+        baseTicks = (lastTs - firstTs) + cfrTicks;
     }
 
-    uint32_t totalFrames = fa.count;
+    uint32_t framePeriodUs = (uint32_t)OSTicksToMicroseconds(cfrTicks);
+    if (framePeriodUs < 1) framePeriodUs = 1;
+
+    if (hasAudio) {
+        uint64_t audioTicks = ((uint64_t)(audioSamples / 2) * (uint64_t)OSSecondsToTicks(1)) /
+                              (audioSampleRate ? audioSampleRate : 48000u);
+        if (audioTicks > baseTicks) baseTicks = audioTicks;
+    }
+
+    uint32_t totalFrames = (uint32_t)((baseTicks + cfrTicks - 1) / cfrTicks);
+    if (totalFrames < 1) totalFrames = 1;
 
     uint32_t maxFrameSize = 0;
     for (uint32_t i = 0; i < fa.count; i++)
@@ -191,17 +212,38 @@ static bool writeAVIImpl(const std::string &path, const FrameAccess &fa,
         sIdxCap = numIdxEntries;
     }
 
-    for (uint32_t i = 0; i < totalFrames; i++) {
-        const CapturedFrame *frame = &fa.frames[i];
+    uint32_t outIdx = 0;
+    auto writeFrame = [&](uint32_t src) {
+        const CapturedFrame *frame = &fa.frames[src];
         uint32_t chunkOffset = (uint32_t)(ftell(fp) - moviDataStart);
         writeFourCC(fp, "00dc");
         writeU32LE(fp, (uint32_t)frame->size);
         fwrite(frame->data, 1, frame->size, fp);
         if (frame->size & 1) { uint8_t pad = 0; fwrite(&pad, 1, 1, fp); }
-        memcpy(sIdxBuf[i].ckid, "00dc", 4);
-        sIdxBuf[i].flags  = 0x10;
-        sIdxBuf[i].offset = chunkOffset;
-        sIdxBuf[i].size   = (uint32_t)frame->size;
+        memcpy(sIdxBuf[outIdx].ckid, "00dc", 4);
+        sIdxBuf[outIdx].flags  = 0x10;
+        sIdxBuf[outIdx].offset = chunkOffset;
+        sIdxBuf[outIdx].size   = (uint32_t)frame->size;
+        outIdx++;
+    };
+
+    if (fa.count > 1) {
+        uint64_t slotStart = firstTs;
+        uint32_t src = 0;
+        while (outIdx < totalFrames && src < fa.count) {
+            uint64_t gapEnd = (src + 1 < fa.count)
+                ? fa.frames[src + 1].timestamp
+                : firstTs + baseTicks;
+            if (gapEnd <= slotStart) { src++; continue; }
+            while (slotStart < gapEnd && outIdx < totalFrames) {
+                writeFrame(src);
+                slotStart += cfrTicks;
+            }
+            src++;
+        }
+    }
+    while (outIdx < totalFrames) {
+        writeFrame(fa.count - 1);
     }
 
     if (hasAudio) {
