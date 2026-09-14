@@ -31,7 +31,6 @@ Record the screen and audio from the Wii U GamePad/TV to a ring buffer in RAM li
 Requirements:
 - [wut](https://github.com/devkitPro/wut)
 - [wups](https://github.com/wiiu-env/WiiUPluginSystem)
-- [wums](https://github.com/wiiu-env/WiiUModuleSystem)
 - [notification module](https://github.com/wiiu-env/NotificationModule)
 
 ```bash

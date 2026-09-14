@@ -49,7 +49,7 @@ static void updateAppName() {
 
 WUPS_PLUGIN_NAME("Screen Capture");
 WUPS_PLUGIN_DESCRIPTION("Capture footage directly on the Wii U.");
-WUPS_PLUGIN_VERSION("v1.0.1");
+WUPS_PLUGIN_VERSION("v1.0.2");
 WUPS_PLUGIN_AUTHOR("SudoTronics");
 WUPS_PLUGIN_LICENSE("GPL");
 
